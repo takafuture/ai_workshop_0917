@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>落ちものパズル</title>
+<style>
+  :root {
+    --cell: 28px;
+    --cols: 10;
+    --rows: 20;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #111827;
+    color: #f9fafb;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  .game {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    padding: 24px;
+  }
+
+  .board-wrap {
+    position: relative;
+    padding: 8px;
+    background: #374151;
+    border-radius: 10px;
+    box-shadow: 0 16px 40px rgba(0,0,0,.35);
+  }
+
+  #board {
+    display: grid;
+    grid-template-columns: repeat(10, var(--cell));
+    grid-template-rows: repeat(20, var(--cell));
+    gap: 1px;
+    background: #0b1020;
+  }
+
+  .cell {
+    width: var(--cell);
+    height: var(--cell);
+    background: #182235;
+    border-radius: 2px;
+  }
+
+  .cell.filled {
+    box-shadow: inset 0 2px 0 rgba(255,255,255,.28), inset 0 -3px 0 rgba(0,0,0,.2);
+  }
+
+  .side {
+    width: 180px;
+  }
+
+  h1 {
+    margin: 0 0 18px;
+    font-size: 24px;
+  }
+
+  .panel {
+    padding: 16px;
+    margin-bottom: 14px;
+    background: #1f2937;
+    border-radius: 10px;
+  }
+
+  .label {
+    font-size: 12px;
+    color: #9ca3af;
+    margin-bottom: 4px;
+  }
+
+  #score {
+    font-size: 30px;
+    font-weight: 700;
+  }
+
+  .help {
+    font-size: 13px;
+    line-height: 1.8;
+    color: #d1d5db;
+  }
+
+  button {
+    width: 100%;
+    border: 0;
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: #2563eb;
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  button:hover { background: #1d4ed8; }
+
+  #message {
+    position: absolute;
+    inset: 8px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 14px;
+    background: rgba(3, 7, 18, .82);
+    border-radius: 4px;
+    text-align: center;
+  }
+
+  #message.show { display: flex; }
+
+  #message strong {
+    font-size: 32px;
+  }
+
+  #message span {
+    color: #d1d5db;
+  }
+
+  @media (max-width: 650px) {
+    :root { --cell: 22px; }
+    .game { gap: 12px; padding: 12px; }
+    .side { width: 130px; }
+    h1 { font-size: 18px; }
+    .help { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+<div class="game">
+  <div class="board-wrap">
+    <div id="board"></div>
+    <div id="message">
+      <strong>GAME OVER</strong>
+      <span id="finalScore"></span>
+      <button id="restart">もう一度遊ぶ</button>
+    </div>
+  </div>
+
+  <aside class="side">
+    <h1>落ちものパズル</h1>
+    <div class="panel">
+      <div class="label">SCORE</div>
+      <div id="score">0</div>
+    </div>
+    <div class="panel help">
+      ← →：移動<br>
+      ↑：回転<br>
+      ↓：早く落とす
+    </div>
+    <button id="newGame">新しいゲーム</button>
+  </aside>
+</div>
+
+<script>
+(() => {
+  const COLS = 10;
+  const ROWS = 20;
+
+  // 7種類のブロック（テトロミノ）
+  const PIECES = [
+    { color: "#A8E6E6", shape: [[1,1,1,1]] },                 // I
+    { color: "#A9C7F5", shape: [[1,0,0],[1,1,1]] },           // J
+    { color: "#F8C6A8", shape: [[0,0,1],[1,1,1]] },           // L
+    { color: "#F8E7A8", shape: [[1,1],[1,1]] },               // O
+    { color: "#B8E6B8", shape: [[0,1,1],[1,1,0]] },           // S
+    { color: "#D5B8E8", shape: [[0,1,0],[1,1,1]] },           // T
+    { color: "#F2B5C4", shape: [[1,1,0],[0,1,1]] }            // Z
+  ];
+
+  const boardEl = document.getElementById("board");
+  const scoreEl = document.getElementById("score");
+  const messageEl = document.getElementById("message");
+  const finalScoreEl = document.getElementById("finalScore");
+
+  const cells = [];
+  for (let i = 0; i < COLS * ROWS; i++) {
+    const cell = document.createElement("div");
+    cell.className = "cell";
+    boardEl.appendChild(cell);
+    cells.push(cell);
+  }
+
+  let board;
+  let current;
+  let score;
+  let gameOver;
+  let lastTime = 0;
+  let dropCounter = 0;
+  let dropInterval = 700;
+  let animationId;
+
+  function createBoard() {
+    return Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+  }
+
+  function cloneMatrix(matrix) {
+    return matrix.map(row => row.slice());
+  }
+
+  function randomPiece() {
+    const p = PIECES[Math.floor(Math.random() * PIECES.length)];
+    const shape = cloneMatrix(p.shape);
+    return {
+      shape,
+      color: p.color,
+      x: Math.floor((COLS - shape[0].length) / 2),
+      y: 0
+    };
+  }
+
+  function collide(piece, dx = 0, dy = 0, shape = piece.shape) {
+    for (let y = 0; y < shape.length; y++) {
+      for (let x = 0; x < shape[y].length; x++) {
+        if (!shape[y][x]) continue;
+
+        const nx = piece.x + x + dx;
+        const ny = piece.y + y + dy;
+
+        if (nx < 0 || nx >= COLS || ny >= ROWS) return true;
+        if (ny >= 0 && board[ny][nx]) return true;
+      }
+    }
+    return false;
+  }
+
+  function rotateMatrix(matrix) {
+    const rows = matrix.length;
+    const cols = matrix[0].length;
+    const rotated = Array.from({ length: cols }, () => Array(rows).fill(0));
+
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        rotated[x][rows - 1 - y] = matrix[y][x];
+      }
+    }
+    return rotated;
+  }
+
+  function rotatePiece() {
+    const rotated = rotateMatrix(current.shape);
+    const oldX = current.x;
+
+    // 壁際では少しずらして回転できるようにする
+    for (const offset of [0, -1, 1, -2, 2]) {
+      current.x = oldX + offset;
+      if (!collide(current, 0, 0, rotated)) {
+        current.shape = rotated;
+        return;
+      }
+    }
+    current.x = oldX;
+  }
+
+  function merge() {
+    for (let y = 0; y < current.shape.length; y++) {
+      for (let x = 0; x < current.shape[y].length; x++) {
+        if (!current.shape[y][x]) continue;
+        const by = current.y + y;
+        const bx = current.x + x;
+        if (by >= 0) board[by][bx] = current.color;
+      }
+    }
+  }
+
+  function clearLines() {
+    let lines = 0;
+
+    outer:
+    for (let y = ROWS - 1; y >= 0; y--) {
+      for (let x = 0; x < COLS; x++) {
+        if (!board[y][x]) continue outer;
+      }
+
+      board.splice(y, 1);
+      board.unshift(Array(COLS).fill(null));
+      lines++;
+      y++;
+    }
+
+    if (lines) {
+      // 1列=100、2列=300、3列=500、4列=800
+      score += [0, 100, 300, 500, 800][lines];
+      scoreEl.textContent = score;
+    }
+  }
+
+  function spawn() {
+    current = randomPiece();
+    if (collide(current)) endGame();
+  }
+
+  function drop() {
+    if (!current || gameOver) return;
+
+    if (!collide(current, 0, 1)) {
+      current.y++;
+    } else {
+      merge();
+      clearLines();
+      spawn();
+    }
+    dropCounter = 0;
+  }
+
+  function hardRender() {
+    cells.forEach(cell => {
+      cell.className = "cell";
+      cell.style.background = "";
+    });
+
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        if (board[y][x]) {
+          const cell = cells[y * COLS + x];
+          cell.className = "cell filled";
+          cell.style.background = board[y][x];
+        }
+      }
+    }
+
+    if (current) {
+      for (let y = 0; y < current.shape.length; y++) {
+        for (let x = 0; x < current.shape[y].length; x++) {
+          if (!current.shape[y][x]) continue;
+          const by = current.y + y;
+          const bx = current.x + x;
+          if (by >= 0 && by < ROWS && bx >= 0 && bx < COLS) {
+            const cell = cells[by * COLS + bx];
+            cell.className = "cell filled";
+            cell.style.background = current.color;
+          }
+        }
+      }
+    }
+  }
+
+  function update(time = 0) {
+    if (gameOver) return;
+
+    const delta = time - lastTime;
+    lastTime = time;
+    dropCounter += delta;
+
+    if (dropCounter > dropInterval) drop();
+    hardRender();
+
+    animationId = requestAnimationFrame(update);
+  }
+
+  function endGame() {
+    gameOver = true;
+    finalScoreEl.textContent = `スコア：${score}`;
+    messageEl.classList.add("show");
+  }
+
+  function startGame() {
+    cancelAnimationFrame(animationId);
+    board = createBoard();
+    current = null;
+    score = 0;
+    gameOver = false;
+    dropCounter = 0;
+    dropInterval = 700;
+    scoreEl.textContent = "0";
+    messageEl.classList.remove("show");
+    spawn();
+    hardRender();
+    lastTime = performance.now();
+    animationId = requestAnimationFrame(update);
+  }
+
+  document.addEventListener("keydown", e => {
+    if (gameOver) return;
+
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+      e.preventDefault();
+    }
+
+    if (e.key === "ArrowLeft" && !collide(current, -1, 0)) {
+      current.x--;
+    } else if (e.key === "ArrowRight" && !collide(current, 1, 0)) {
+      current.x++;
+    } else if (e.key === "ArrowUp") {
+      rotatePiece();
+    } else if (e.key === "ArrowDown") {
+      drop();
+      score += 1;
+      scoreEl.textContent = score;
+    }
+
+    hardRender();
+  });
+
+  document.getElementById("newGame").addEventListener("click", startGame);
+  document.getElementById("restart").addEventListener("click", startGame);
+
+  startGame();
+})();
+</script>
+</body>
+</html>
